@@ -61,7 +61,7 @@ Untransformed `ridge` should **not** be deployed over `baseline_persistence` wit
   * Raw-column contract test `test_all_raw_columns_classified` in `tests/test_contract.py`.
   * Target-transformation evaluation harness in `experiments/transform_targets.py`, invoked through our custom `/evaluate-experiment` skill (`.claude/skills/evaluate-experiment/SKILL.md`).
   * Automated leakage audits (`/leakage-auditor` on teammate repo in `docs/AUDIT.md` and `agent/audit.py` batch self-audit in `reports/audit.jsonl`).
-  * Used Gemini on browser to review and polish the report. 
+  * Used Gemini on browser to review and polish the report, and for assistance when stuck on certian steps.
 * **Human decisions and verification:**
   * **Problem framing & leakage boundary:** Defined daily `cnt` forecasting, enforced exclusion of `casual`, `registered`, `cnt_2d_bfr`, and time indexes (`instant`, `yr`, `days_since_2011`), and designed the raw-schema completeness contract test.
   * **Temporal split & single-touch test discipline:** Enforced strict chronological splits (`2011` / `H1 2012` / `H2 2012`) and held out `H2 2012` until validation model/transform selection was complete.
