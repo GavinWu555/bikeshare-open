@@ -278,3 +278,32 @@ def test_unmapped_weather_label_raises():
 I've left the tree at the restore you asked for and haven't written the test — say which and I'll do it test-first, showing red before green.
 
 ### Turns to Fix: 1
+
+## Fault 4: Unmonitored `cp` into `data/raw/` via Bash
+
+### Command and Output
+```text
+$ printf 'corrupted,data\n1,2\n' > /tmp/corrupted_raw.csv
+$ cp /tmp/corrupted_raw.csv data/raw/corrupted_raw.csv
+$ ls -la data/raw/
+$ make test
+$ rm data/raw/corrupted_raw.csv /tmp/corrupted_raw.csv
+$ git status
+total 184
+drwxr-xr-x@ 4 gavinwu  staff    128 Nov 25 20:52 .
+drwxr-xr-x@ 4 gavinwu  staff    128 Nov 24 00:11 ..
+-rw-r--r--@ 1 gavinwu  staff  86325 Nov 10 09:52 bike_daily.csv
+-rw-r--r--  1 gavinwu  staff     19 Nov 25 20:52 corrupted_raw.csv
+python -m pytest tests/ -q
+................                                                         [100%]
+16 passed in 1.89s
+
+```
+### What Happened:
+
+`.claude/settings.json` scopes `PostToolUse` exclusively to `Edit|Write`, so `Bash` commands do not invoke `.claude/hooks/check_leakage.sh`. Similarly, `permissions.deny` blocks `Write(./data/raw/**)` and `Edit(./data/raw/**)` at the file-tool level, leaving shell operations (`cp`, `mv`, `>`, `tee`) unrestricted. Because `src/ingest.py` reads `data/raw/bike_daily.csv` directly without checking the directory manifest or file hash, extra files (or a silent overwrite of `bike_daily.csv` via `cp`) pass `make test` unnoticed.
+
+### What Would Have Caught It
+1. **SHA-256 digest and directory manifest test:** Pin the expected SHA-256 checksum of `data/raw/bike_daily.csv` and assert the exact set of filenames in `data/raw/` inside `tests/test_contract.py` (and before `make features` or `make train` runs).
+2. **OS-level read-only permissions + `PreToolUse` Bash guard:** Set `chmod 444 data/raw/bike_daily.csv` and `chmod 555 data/raw/` on disk (causing shell `cp` to fail with `Permission denied`) and add a `PreToolUse` hook on `Bash` rejecting commands that target `data/raw/`.
+
