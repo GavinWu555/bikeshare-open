@@ -47,6 +47,22 @@ def test_lag_is_not_the_target(feats):
     assert not (feats.cnt_lag_1 == feats[TARGET]).all()
 
 
+def test_lag_3_is_a_true_calendar_lag(feats):
+    """cnt_lag_3 for date d must equal cnt on d-3, in calendar days."""
+    by_date = feats.set_index("dteday")[TARGET]
+    checked = 0
+    for date, lag in feats.set_index("dteday").cnt_lag_3.items():
+        prev = date - pd.Timedelta(days=3)
+        if prev in by_date.index:
+            assert lag == pytest.approx(by_date[prev]), f"bad lag at {date.date()}"
+            checked += 1
+    assert checked > 600, "too few rows actually verified"
+
+
+def test_lag_3_is_not_the_target(feats):
+    assert not (feats.cnt_lag_3 == feats[TARGET]).all()
+
+
 def test_rolling_mean_excludes_today(feats):
     """cnt_roll_7 must be the mean of the 7 calendar days *before* today."""
     by_date = feats.set_index("dteday")[TARGET]
