@@ -155,3 +155,64 @@ return [c for c in numeric if c not in FORBIDDEN] + ["casual"]
 feature_columns() is the only gate between the dataframe and the model — build_features never drops casual, it just declines to select it. Appending casual after the filter re-admits it past FORBIDDEN, which is precisely the class of edit test_no_forbidden_features exists to catch. The test did its job:
 
 ### Turns to Fix: 1
+
+## Fault 2: Removed '.shift(1)` from `cnt_roll_7`
+
+### Exact Change Seeded
+In `src/features.py` removed `.shift(1)` from `cnt_roll_7` so same-day `cnt` is included in the 7-day rolling mean:
+
+```
+-    out["cnt_roll_7"] = out[TARGET].shift(1).rolling(LAG_WARMUP).mean()
++    out["cnt_roll_7"] = out[TARGET].rolling(LAG_WARMUP).mean()
+```
+
+### Red Test Output:
+```
+E           assert np.float64(4389.0) == 4414.857142857143 ± 0.00441486
+E             
+E             comparison failed
+E             Obtained: 4389.0
+E             Expected: 4414.857142857143 ± 0.00441486
+
+tests/test_leakage.py
+```
+
+### Hook:
+```
+Leakage tests failed after editing /Users/gavinwu/desktop/bikeshare-open/src/features.py:
+[714 rows x 29 columns]
+
+    def test_rolling_mean_excludes_today(feats):
+        """cnt_roll_7 must be the mean of the 7 calendar days *before* today."""
+        by_date = feats.set_index("dteday")[TARGET]
+        date = feats.dteday.iloc[200]
+        window = [date - pd.Timedelta(days=k) for k in range(1, 8)]
+        if all(d in by_date.index for d in window):
+            expected = sum(by_date[d] for d in window) / 7
+>           assert feats.set_index("dteday").cnt_roll_7[date] == pytest.approx(expected)
+E           assert np.float64(4389.0) == 4414.857142857143 ± 0.00441486
+E             
+E             comparison failed
+E             Obtained: 4389.0
+E             Expected: 4414.857142857143 ± 0.00441486
+
+tests/test_leakage.py:73: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_leakage.py::test_rolling_mean_excludes_today - assert np.fl...
+1 failed, 8 passed in 0.89s
+```
+
+### Diagnosis:
+
+Not the same fault as last time. This one was at src/features.py:77, in the rolling mean:
+
+out["cnt_roll_7"] = out[TARGET].rolling(LAG_WARMUP).mean()          # broken
+out["cnt_roll_7"] = out[TARGET].shift(1).rolling(LAG_WARMUP).mean()  # restored
+
+The .shift(1) was dropped, so the window covered days d−6 … d including today's count instead of d−7 … d−1. That is direct target leakage — the feature carries roughly 1/7 of the value being predicted, computed at a time when it could not possibly be known.
+
+The failing test named it exactly: test_rolling_mean_excludes_today. On the sampled date it wanted 4414.857 but got 4389.0 — the mismatch is what pinpoints inclusion of today rather than a random misalignment.
+
+I checked the reason this one is quieter than the casual leak and it's worth stating: it inflates scores by a fraction, not to 1.0, so it can look like a genuine gain. On this data it was not caught by the gate test (test_no_forbidden_features) at all — the forbidden-column gate only guards which columns reach the model, not whether a column was computed honestly. Only the value-level date check caught it. That's the strongest argument in the repo for why the lag tests hand-compute from calendar dates instead of just checking column names.
+
+### Turns to Fix: 1
