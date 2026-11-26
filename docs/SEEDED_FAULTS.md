@@ -216,3 +216,65 @@ The failing test named it exactly: test_rolling_mean_excludes_today. On the samp
 I checked the reason this one is quieter than the casual leak and it's worth stating: it inflates scores by a fraction, not to 1.0, so it can look like a genuine gain. On this data it was not caught by the gate test (test_no_forbidden_features) at all — the forbidden-column gate only guards which columns reach the model, not whether a column was computed honestly. Only the value-level date check caught it. That's the strongest argument in the repo for why the lag tests hand-compute from calendar dates instead of just checking column names.
 
 ### Turns to Fix: 1
+
+## Fault 3: Removed `ValueError`  in `encode_weather`
+In `src/features.py`, removed `if unknown: raise ValueError(...)` from `encode_weather()` so unseen weather labels silently map to `NaN` instead of failing loudly:
+
+```
+    unknown = set(known.unique()) - set(WEATHER_ORDER)
+-       if unknown:
+-           raise ValueError(f"unmapped weather labels: {sorted(unknown)}")
+        return series.map(WEATHER_ORDER).astype(float)
+```
+### Red Test Output:
+
+Interestingly, all tests passed even after removing the `raise`:
+
+```
+................                                                         [100%]
+16 passed in 1.86s
+```
+
+### Hook:
+
+No output, as all tests passed.
+
+### Prompt:
+encode_weather in src/features.py allows for invalid weather labels to fail silently instead of raising ValueError. Restore the guard and check if any test covers it.
+
+### Diagnosis:
+
+Guard restored
+
+src/features.py:27-31 is back to matching HEAD — the two-line check that was left behind as dead code now actually fires again:
+
+known = series.dropna()
+unknown = set(known.unique()) - set(WEATHER_ORDER)
+if unknown:
+    raise ValueError(f"unmapped weather labels: {sorted(unknown)}")
+return series.map(WEATHER_ORDER).astype(float)
+
+Directly verified: encode_weather(pd.Series(["GOOD", "SNOW", None])) now raises unmapped weather labels: ['SNOW'], while the real labels still encode to [0.0, 1.0, 2.0, nan]. make features && make test && make train → 16 passed, validation unchanged at ridge 0.6462 / hgb 0.1891. No commit.
+
+What was deleted was only the if unknown: raise. The unknown = ... line stayed, so the function kept computing the answer and discarding it — which makes this the most evasive of the three faults so far: it reads as if the check is still there unless you look at whether unknown is used.
+
+No test covers it
+
+Zero hits for weather (case-insensitive) across all three test files — test_leakage.py, test_contract.py, test_split.py. encode_weather is never imported or named in a test, and there is no pytest.raises anywhere in the suite. The 16 passing tests pass identically with the guard present or absent.
+
+The reason nothing catches it is worth stating plainly: on this data the guard is unreachable. The mirror contains exactly ['BAD', 'GOOD', 'MISTY'] with 0 NaN weather across 728 rows, so .map() never produces a stray NaN and dropna() deletes nothing. Removing the guard changes no output on the current file — which is precisely why make features printed OK ... 714 rows both before and after. The docstring's horror story (20 BAD days vanishing silently) is a future-data hazard: it triggers when someone refreshes the mirror or swaps in the UCI original, whose weather column uses codes 1–4 (src/config.py:16). Every label there is "unseen," every row maps to NaN, and the whole dataset disappears with no error. That is the scenario the test needs to cover, and no test does.
+
+So the guard is currently the only thing standing between a data swap and a silently empty training set, and it has zero test coverage — a gap in exactly the protection mechanism the repo's own docstring argues for.
+
+Two cheap backstops, if you want them:
+
+1. A unit test that needs no data — encode_weather takes a Series, so this is two lines and the honest version of test-first: it passes today and would go red the moment someone deletes the raise again.
+def test_unmapped_weather_label_raises():
+    with pytest.raises(ValueError, match="unmapped weather labels"):
+        encode_weather(pd.Series(["GOOD", "SNOW"]))
+   Worth pairing with an assertion that known labels pass through unmapped, so the test can't be satisfied by an unconditional raise.
+2. flake8/ruff would flag the dead unknown assignment (F841, local variable never used) — but there's no lint target in the Makefile, so this only helps if you want one added.
+
+I've left the tree at the restore you asked for and haven't written the test — say which and I'll do it test-first, showing red before green.
+
+### Turns to Fix: 1
